@@ -1,0 +1,47 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "cwd": "/UnreliableLabels/flib/AMLsim"
+        },
+        {
+            "type": "java",
+            "name": "Current File",
+            "request": "launch",
+            "mainClass": "${file}"
+        },
+        {
+            "type": "java",
+            "name": "AMLSim",
+            "request": "launch",
+            "mainClass": "amlsim.AMLSim",
+            "projectName": "amlsim",
+            "cwd": "${workspaceFolder}/flib/AMLsim"
+        },
+        {
+            "type": "java",
+            "name": "TestScript",
+            "request": "launch",
+            "mainClass": "amlsim.dists.salarydist.TestScript",
+            "projectName": "amlsim"
+            ,"cwd": "${workspaceFolder}/flib/AMLsim"
+        },
+        {
+            "type": "java",
+            "name": "Diameter",
+            "request": "launch",
+            "mainClass": "amlsim.stat.Diameter",
+            "projectName": "amlsim"
+            ,"cwd": "${workspaceFolder}/flib/AMLsim"
+        }
+        
+    ]
+}
