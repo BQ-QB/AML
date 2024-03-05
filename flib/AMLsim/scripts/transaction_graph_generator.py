@@ -245,7 +245,12 @@ class TransactionGenerator:
         self.out_account_file = output_conf["accounts"]  # All account list CSV file
         self.out_alert_member_file = output_conf["alert_members"]  # Account list of AML typology members CSV file
         self.out_normal_models_file = output_conf["normal_models"] # List of normal models CSV file
- 
+
+        # Get true_out_dir and node_log file
+        true_output_conf = self.conf["output"]
+        self.true_out_dir = os.path.join(true_output_conf["directory"], sim_name)  # The directory name of output files
+        self.node_log_file = true_output_conf["node_log"]  # Account log file
+        
         # Other properties for the transaction graph generator
         other_conf = self.conf["graph_generator"]
         self.degree_threshold = parse_int(other_conf["degree_threshold"])  # Degree for candidates of main accounts
@@ -1451,6 +1456,30 @@ class TransactionGenerator:
         sub_g.graph[TRUE_LABEL_KEY] = true_label  # True label flag
         self.alert_groups[self.alert_id] = sub_g
         self.alert_id += 1
+        
+    def write_node_list(self):
+        os.makedirs(self.true_out_dir, exist_ok=True)
+        acct_file = os.path.join(self.true_out_dir, self.node_log_file)
+        with open(acct_file, "w") as wf:
+            writer = csv.writer(wf)
+            base_attrs = ["ACCOUNT_ID", "CUSTOMER_ID", "INIT_BALANCE", "COUNTRY",
+                          "ACCOUNT_TYPE", "IS_SAR", "BANK_ID", "TRUE_LABEL"] # column names
+            writer.writerow(base_attrs + self.attr_names) # add user-defined attributes
+            for n in self.g.nodes(data=True): # loop over all nodes with access to their attributes
+                aid = n[0]  # Account ID
+                cid = "C_" + str(aid)  # Customer ID bounded to this account
+                prop = n[1]  # Account attributes
+                balance = "{0:.2f}".format(prop["init_balance"])  # Initial balance
+                country = prop["country"]  # Country
+                business = prop["business"]  # Business type
+                is_sar = "true" if prop[IS_SAR_KEY] else "false"  # Whether this account is involved in SAR
+                bank_id = prop["bank_id"]  # Bank ID
+                true_label = "true" if prop[TRUE_LABEL_KEY] else "false"  # True label
+                values = [aid, cid, balance, country, business, is_sar, bank_id, true_label]
+                for attr_name in self.attr_names:
+                    values.append(prop[attr_name])
+                writer.writerow(values)
+        logger.info("Exported %d accounts to %s" % (self.g.number_of_nodes(), acct_file))        
 
     def write_account_list(self):
         """Write account list to a CSV file."""
@@ -1822,3 +1851,4 @@ if __name__ == "__main__":
     txg.write_transaction_list()  # Export transactions to a CSV file
     txg.write_alert_account_list()  # Export alert accounts to a CSV file
     txg.write_normal_models()
+    txg.write_node_list() # Export nodes to node_log.csv
