@@ -14,7 +14,6 @@ import logging
 import cProfile
 
 
-
 from collections import Counter, defaultdict
 from amlsim.nominator import Nominator
 from amlsim.normal_model import NormalModel
@@ -246,11 +245,17 @@ class TransactionGenerator:
         self.out_alert_member_file = output_conf["alert_members"]  # Account list of AML typology members CSV file
         self.out_normal_models_file = output_conf["normal_models"] # List of normal models CSV file
 
-        # Get true_out_dir and node_log file
+        # 
         true_output_conf = self.conf["output"]
         self.true_out_dir = os.path.join(true_output_conf["directory"], sim_name)  # The directory name of output files
         self.node_log_file = true_output_conf["node_log"]  # Account log file
-        
+
+        # Get output for noise files
+        noise_output_conf = self.conf["output"]
+        self.noise_out_dir = os.path.join(noise_output_conf["directory"], sim_name)  # The directory name of output files
+        self.noise_out_file = noise_output_conf["noise_log"]  # Account log file
+
+ 
         # Other properties for the transaction graph generator
         other_conf = self.conf["graph_generator"]
         self.degree_threshold = parse_int(other_conf["degree_threshold"])  # Degree for candidates of main accounts
@@ -891,8 +896,6 @@ class TransactionGenerator:
                     idx_sar = i
                 elif k == "source_type": # Source type 
                     idx_source_type = i
-                elif k == "true_label": # Source type 
-                    idx_true_label = i
                 else:
                     logger.warning("Unknown column name in %s: %s" % (alert_file, k))
 
@@ -912,7 +915,6 @@ class TransactionGenerator:
                 max_period = parse_int(row[idx_max_period])
                 bank_id = row[idx_bank] if idx_bank is not None else ""  # If empty, it has inter-bank transactions
                 is_sar = parse_flag(row[idx_sar])
-                true_label = parse_flag(row[idx_true_label])
                 source_type = row[idx_source_type]
 
                 if typology_name not in self.alert_types:
@@ -923,12 +925,12 @@ class TransactionGenerator:
                 for i in range(num_patterns):
                     num_accts = random.randrange(min_accts, max_accts + 1) # Number of accounts
                     period = random.randrange(min_period, max_period + 1) # Period
-                    self.add_aml_typology(is_sar,true_label, typology_name, num_accts, min_amount, max_amount, period, bank_id, schedule, source_type)
+                    self.add_aml_typology(is_sar, typology_name, num_accts, min_amount, max_amount, period, bank_id, schedule, source_type)
                     count += 1
                     if count % 1000 == 0:
                         logger.info("Created %d alerts" % count)
 
-    def add_aml_typology(self, is_sar, true_label, typology_name, num_accounts, min_amount, max_amount, period, bank_id="", schedule=1, source_type='TRANSFER'):
+    def add_aml_typology(self, is_sar, typology_name, num_accounts, min_amount, max_amount, period, bank_id="", schedule=1, source_type='TRANSFER'):
         #TODO insert noise parameter
         """Add an AML typology transaction set
         :param is_sar: Whether the alerted transaction set is SAR (True) or false-alert (False)
@@ -1453,10 +1455,35 @@ class TransactionGenerator:
         # Add the generated transaction edges to whole transaction graph
         sub_g.graph[MAIN_ACCT_KEY] = main_acct  # Main account ID
         sub_g.graph[IS_SAR_KEY] = is_sar  # SAR flag
-        sub_g.graph[TRUE_LABEL_KEY] = true_label  # True label flag
         self.alert_groups[self.alert_id] = sub_g
         self.alert_id += 1
-        
+
+    def write_account_list(self):
+        """Write account list to a CSV file.
+        """        
+        os.makedirs(self.output_dir, exist_ok=True)
+        acct_file = os.path.join(self.output_dir, self.out_account_file)
+        with open(acct_file, "w") as wf:
+            writer = csv.writer(wf)
+            base_attrs = ["ACCOUNT_ID", "CUSTOMER_ID", "INIT_BALANCE", "COUNTRY",
+                          "ACCOUNT_TYPE", "IS_SAR", "BANK_ID", "TRUE_LABEL"] # column names
+            writer.writerow(base_attrs + self.attr_names) # add user-defined attributes
+            for n in self.g.nodes(data=True): # loop over all nodes with access to their attributes
+                aid = n[0]  # Account ID
+                cid = "C_" + str(aid)  # Customer ID bounded to this account
+                prop = n[1]  # Account attributes
+                balance = "{0:.2f}".format(prop["init_balance"])  # Initial balance
+                country = prop["country"]  # Country
+                business = prop["business"]  # Business type
+                is_sar = "true" if prop[IS_SAR_KEY] else "false"  # Whether this account is involved in SAR
+                bank_id = prop["bank_id"]  # Bank ID
+                true_label = "true" if prop[TRUE_LABEL_KEY] else "false"  # True label
+                values = [aid, cid, balance, country, business, is_sar, bank_id, true_label]
+                for attr_name in self.attr_names:
+                    values.append(prop[attr_name])
+                writer.writerow(values)
+        logger.info("Exported %d accounts to %s" % (self.g.number_of_nodes(), acct_file))
+
     def write_node_list(self):
         os.makedirs(self.true_out_dir, exist_ok=True)
         acct_file = os.path.join(self.true_out_dir, self.node_log_file)
@@ -1479,34 +1506,24 @@ class TransactionGenerator:
                 for attr_name in self.attr_names:
                     values.append(prop[attr_name])
                 writer.writerow(values)
-        logger.info("Exported %d accounts to %s" % (self.g.number_of_nodes(), acct_file))        
+        logger.info("Exported %d accounts to %s" % (self.g.number_of_nodes(), acct_file))     
 
-    def write_account_list(self):
-        """Write account list to a CSV file."""
-        os.makedirs(self.output_dir, exist_ok=True)
-        acct_file = os.path.join(self.output_dir, self.out_account_file)
+    def write_noise_list(self, noise_list,reasons):
+        os.makedirs(self.true_out_dir, exist_ok=True)
+        acct_file = os.path.join(self.true_out_dir, self.noise_out_file)
+        counter = 0
         with open(acct_file, "w") as wf:
             writer = csv.writer(wf)
-            # Include TRUE_LABEL in the base attributes
-            base_attrs = ["ACCOUNT_ID", "CUSTOMER_ID", "INIT_BALANCE", "COUNTRY",
-                        "ACCOUNT_TYPE", "IS_SAR", "TRUE_LABEL", "BANK_ID"]  # Added TRUE_LABEL here
-            writer.writerow(base_attrs + self.attr_names)  # add user-defined attributes
-            for n in self.g.nodes(data=True):  # loop over all nodes with access to their attributes
-                aid = n[0]  # Account ID
-                cid = "C_" + str(aid)  # Customer ID bounded to this account
-                prop = n[1]  # Account attributes
-                balance = "{0:.2f}".format(prop["init_balance"])  # Initial balance
-                country = prop["country"]  # Country
-                business = prop["business"]  # Business type
-                is_sar = "true" if prop[IS_SAR_KEY] else "false"  # Whether this account is involved in SAR
-                true_label = "true" if prop.get(TRUE_LABEL_KEY, False) else "false"  # Retrieve TRUE_LABEL value
-                bank_id = prop["bank_id"]  # Bank ID
-                values = [aid, cid, balance, country, business, is_sar,true_label,bank_id]  # Include true_label in values
-                for attr_name in self.attr_names:
-                    values.append(prop.get(attr_name, ""))  # Use prop.get to avoid KeyError if attribute is missing
-                writer.writerow(values)
-        logger.info("Exported %d accounts to %s" % (self.g.number_of_nodes(), acct_file))
-
+            base_attrs = ["ACCOUNT_ID", "REASON"]
+            writer.writerow(base_attrs + self.attr_names) # add user-defined attributes
+            for i, list in enumerate(noise_list): # loop over all nodes with access to their attributes
+                reason = reasons[i]  # Reason for noise
+                for k in range(len(list)):
+                    aid = list[k]  # Account ID
+                    values = [aid, reason]
+                    writer.writerow(values)
+                    counter += 1
+        logger.info("Exported %d accounts to noise, to %s" % (counter, acct_file))
 
     def write_transaction_list(self):
         """Write transaction list to a CSV file.
@@ -1526,56 +1543,53 @@ class TransactionGenerator:
         logger.info("Exported %d transactions to %s" % (self.g.number_of_edges(), tx_file))
 
     def write_alert_account_list(self):
-        """Write alert account list to a CSV file."""
+        """Write alert account list to a CSV file.
+        """        
         def get_out_edge_attrs(g, vid, name):
-            return [v for k, v in nx.get_edge_attributes(g, name).items() if k[0] == vid or k[1] == vid]
+            return [v for k, v in nx.get_edge_attributes(g, name).items() if (k[0] == vid or k[1] == vid)]
 
         acct_count = 0
         alert_member_file = os.path.join(self.output_dir, self.out_alert_member_file)
         logger.info("Output alert member list to: " + alert_member_file)
         with open(alert_member_file, "w") as wf:
             writer = csv.writer(wf)
-            base_attrs = ["alertID", "reason", "accountID", "isMain", "isSAR", "true_label", "modelID",
-                        "minAmount", "maxAmount", "startStep", "endStep", "scheduleID", "bankID", "sourceType"]
+            base_attrs = ["alertID", "reason", "accountID", "isMain", "isSAR", "modelID",
+                          "minAmount", "maxAmount", "startStep", "endStep", "scheduleID", "bankID", "sourceType"]
             writer.writerow(base_attrs + self.attr_names)
-            for gid, sub_g in self.alert_groups.items():
-                main_id = sub_g.graph[MAIN_ACCT_KEY]
-                model_id = sub_g.graph["model_id"]
-                schedule_id = sub_g.graph["scheduleID"]
-                reason = sub_g.graph["reason"]
-                start = sub_g.graph["start"]
-                end = sub_g.graph["end"]
-                source_type = sub_g.graph["source_type"]
-                for n in sub_g.nodes():
+            for gid, sub_g in self.alert_groups.items(): # go over all subgraphs of alert groups
+                main_id = sub_g.graph[MAIN_ACCT_KEY] # get main account ID
+                model_id = sub_g.graph["model_id"] # get the type of money laundering
+                schedule_id = sub_g.graph["scheduleID"] # get the type of scheduling
+                reason = sub_g.graph["reason"] # get the type of money laundering
+                start = sub_g.graph["start"] # starting step 
+                end = sub_g.graph["end"] # ending step
+                source_type = sub_g.graph["source_type"] # source type
+                for n in sub_g.nodes(): # go over all nodes in the subgraph
                     is_main = "true" if n == main_id else "false"
-                    prop = self.g.node[n]
-                    is_sar = "true" if prop[IS_SAR_KEY] else "false"
-                    true_label = "true" if prop.get(TRUE_LABEL_KEY, False) else "false"
-                    
-                    # Handle empty sequences for min and max amount
-                    edge_attrs = get_out_edge_attrs(sub_g, n, "amount")
-                    min_amt = '{:.2f}'.format(min(edge_attrs) if edge_attrs else 0)
-                    max_amt = '{:.2f}'.format(max(edge_attrs) if edge_attrs else 0)
-
-                    bank_id = prop["bank_id"]
-                    values = [gid, reason, n, is_main, is_sar, true_label, model_id, min_amt, max_amt,
-                            start, end, schedule_id, bank_id, source_type]
-                    for attr_name in self.attr_names:
-                        values.append(prop.get(attr_name, ""))
-                    writer.writerow(values)
+                    is_sar = "true" if sub_g.graph[IS_SAR_KEY] else "false"
+                    min_amt = '{:.2f}'.format(min(get_out_edge_attrs(sub_g, n, "amount")))
+                    max_amt = '{:.2f}'.format(max(get_out_edge_attrs(sub_g, n, "amount")))
+                    min_step = start
+                    max_step = end
+                    bank_id = sub_g.node[n]["bank_id"]
+                    values = [gid, reason, n, is_main, is_sar, model_id, min_amt, max_amt,
+                              min_step, max_step, schedule_id, bank_id, source_type] # read out all the values
+                    prop = self.g.node[n] # get the current node from the main graph
+                    for attr_name in self.attr_names: # read out all the user-defined attributes
+                        values.append(prop[attr_name]) # append the values to the list
+                    writer.writerow(values) # write the values to the CSV file
                     acct_count += 1
 
-        logger.info("Exported %d members for %d AML typologies to %s" % (acct_count, len(self.alert_groups), alert_member_file))
-
+        logger.info("Exported %d members for %d AML typologies to %s" %
+                    (acct_count, len(self.alert_groups), alert_member_file))
 
     def write_normal_models(self):       
         """Write normal models to a CSV file.
         """          
-        #TODO Kan skapa noise för normal precis innan eller I det här steget.
         output_file = os.path.join(self.output_dir, self.out_normal_models_file)
         with open(output_file, "w") as wf:
             writer = csv.writer(wf)
-            column_headers = ["modelID", "type", "accountID", "isMain", "isSAR","TRUE_LABEL", "scheduleID", "startStep", "endStep"]
+            column_headers = ["modelID", "type", "accountID", "isMain", "isSAR", "scheduleID", "startStep", "endStep"]
             writer.writerow(column_headers)
             
             for normal_model in self.normal_models: # go over the normal models
@@ -1584,7 +1598,7 @@ class TransactionGenerator:
                     start_step = normal_model.start_step
                     end_step = normal_model.end_step
                     is_main = normal_model.is_main(account_id)
-                    values = [normal_model.id, normal_model.type, account_id, is_main, False, False, schedule_id, start_step, end_step] # TODO: check if the scheduleID should be 2
+                    values = [normal_model.id, normal_model.type, account_id, is_main, False, schedule_id, start_step, end_step] # TODO: check if the scheduleID should be 2
                     writer.writerow(values)
 
     def count__patterns(self, threshold=2):
@@ -1610,119 +1624,134 @@ class TransactionGenerator:
             logger.info("\tNumber of alerted fan-in / fan-out patterns with %d neighbors: %d / %d"
                         % (th, num_fan_in, num_fan_out))
     
-    def introduce_label_noise(self, false_positive_rate=1, false_negative_rate=0):
+    def introduce_random_noise(self):
         """Indroduce  noise in a simplified way
         """ 
-        for n, data in self.g.nodes(data=True):
-            if data[IS_SAR_KEY] and random.random() < false_negative_rate:
+        reason = 'Random'
+        nodes_to_noise = set()
+
+        false_positive_rate=0.01 
+        false_negative_rate=0.01
+
+        for node, data in self.g.nodes(data=True):
+            if data[IS_SAR_KEY] and (random.random() < false_negative_rate):
                 # Convert SAR to non-SAR with a certain probability (false negative)
-                data[IS_SAR_KEY] = False
+                nodes_to_noise.add(node)
                 
-            elif not data[IS_SAR_KEY] and random.random() < false_positive_rate:
+            elif not data[IS_SAR_KEY] and (random.random() < false_positive_rate):
                 # Convert non-SAR to SAR with a certain probability (false positive)
-                data[IS_SAR_KEY] = True
+                nodes_to_noise.add(node)
 
-    def introduce_noise_to_typologies(self):
+        print("Number of random noise nodes: ", len(nodes_to_noise))
+
+        return list(nodes_to_noise), reason
+
+
+
+    def introduce_noise_to_typologies(self): 
+        """Indroduce  noise with specific percentages on specific money laundering patterns 
         """
-        Flip the 'is_sar' label for accounts within each typology based on specified noise ratios for each typology.
-        The method assumes all accounts are initially marked as SAR (True).
-        
-        Parameters:
-        - noise_ratios (dict): A dictionary mapping each typology to the probability with which to flip the 'is_sar' label from True to False.
-        """
-        noise_ratios = {
-            "fan_in": 1,
-            "fan_out": 1,
-            "cycle": 1,
-            "bipartite": 1,
-            "random": 1,
-            "scatter_gather": 1,
-            "gather_scatter": 1,
+        #TODO Fixa en enkelt sätt så att vi har en stor procent parameter och at distrubutionen över de olika topologierna randomiseras.
+
+        list_of_noise_lists = []
+        list_of_reasons = []
+
+        pattern_noise_ratios = {
+            "fan_in": 0,  # Example: 10% noise for fan-in patterns
+            "fan_out": 0, 
+            "cycle": 0,  
+            "bipartite": 0,
+            "random": 0,
+            "scatter_gather": 0,
+            "gather_scatter": 0,
         }
-        # Iterate through each alert group and introduce noise based on its typology
+
+
         for alert_id, subgraph in self.alert_groups.items():
-            # Determine the noise ratio for the current typology
-            typology = subgraph.graph['reason']  # Assuming 'reason' key holds the typology name
-            typology_noise_ratio = noise_ratios.get(typology, 0)  # Default to 0 if typology not found in noise_ratios
+            reason = 'Topology - '
+            nodes_to_noise = set()
 
-            # Flip the 'is_sar' label for nodes in the current subgraph based on the typology's noise ratio
-            for node in subgraph.nodes():
-                if random.random() < typology_noise_ratio:
-                    # Ensure the node exists in the main graph before changing its attribute
-                    if node in self.g:
-                        self.g.node[node]['is_sar'] = False
+            pattern_type = subgraph.graph['reason']  # Assume pattern type is stored under 'reason' key in subgraph attributes
+            reason = reason + pattern_type
 
+            # Apply default noise ratio if the pattern type is not specified in the ratios dictionary
+            noise_ratio = pattern_noise_ratios.get(pattern_type, 0)  # Default to 0% noise if pattern type not specified
 
-    
+            # Get all accounts in this typology
+            typology_accounts = list(subgraph.nodes())
+            # Determine the number of accounts to introduce noise to
+            num_noise_accounts = int(len(typology_accounts) * noise_ratio)
+            # Randomly select accounts to introduce noise to
+            noise_accounts = random.sample(typology_accounts, num_noise_accounts)
+
+            for account in noise_accounts:
+                nodes_to_noise.add(account)
+
+            list_of_noise_lists.append(list(nodes_to_noise))
+            list_of_reasons.append(reason)
+
+        return list_of_noise_lists, list_of_reasons
 
 
             
-    
 
-    def introduce_transaction_deletions(self, deletion_ratio=0.5):
-        """Randomly remove certain transactions from the graph to simulate incomplete data or transactions that failed to be recorded."""
+
+    
+    def introduce_transaction_deletions(self, deletion_ratio=0.01):
+        """Randomly remove certain transactions from the graph to simulate incomplete data or transactions that failed to be recorded.
+        """
         transactions = list(self.g.edges())
         num_deletions = int(len(transactions) * deletion_ratio)
         for _ in range(num_deletions):
-            transaction_to_delete = random.choice(transactions)  # Use random.choice here
-            if self.g.has_edge(*transaction_to_delete):
-                self.g.remove_edge(*transaction_to_delete)
-            transactions.remove(transaction_to_delete)  # Ensure the same transaction isn't selected again
-
-
+            transaction_to_delete = np.random.choice(transactions)
+            self.g.remove_edge(*transaction_to_delete)
 
     def introduce_transaction_deletions_within_typologies(self):
+        """Delete transactions within specific AML typologies based on ratios.
+        """
         pattern_deletion_ratios = {
-            "fan_in": 0.5,
-            "fan_out": 0.5,
-            "cycle": 0.5,
-            "bipartite": 0.5,
-            "random": 0.5,
-            "scatter_gather": 0.5,
-            "gather_scatter": 0.5,
+            "fan_in": 0.05,  # Example: 5% of transactions in fan-in patterns will be deleted
+            "fan_out": 0.1,  
+            "cycle": 0.01,  
+            "bipartite": 0.01,
+            "random": 0.01,
+            "scatter_gather": 0.1,
+            "gather_scatter": 0.1,
         }
 
-        # Iterate through each typology and its subgraph
         for alert_id, subgraph in self.alert_groups.items():
-            pattern_type = subgraph.graph['reason']
-            deletion_ratio = pattern_deletion_ratios.get(pattern_type, 0)
+            pattern_type = subgraph.graph['reason']  
 
-            # Identify nodes part of the current typology
-            typology_nodes = set(subgraph.nodes())
+            
+            deletion_ratio = pattern_deletion_ratios.get(pattern_type, 0)  
 
-            # Identify transactions for deletion where either the source or destination node is part of the typology
-            transactions_to_delete = []
-            for u, v in self.g.edges():
-                if u in typology_nodes or v in typology_nodes:
-                    transactions_to_delete.append((u, v))
+            # Get all transactions in this typology
+            typology_transactions = list(subgraph.edges())
+            # Determine the number of transactions to delete
+            num_transactions_to_delete = int(len(typology_transactions) * deletion_ratio)
+            # Randomly select transactions to delete
+            transactions_to_delete = random.sample(typology_transactions, num_transactions_to_delete)
 
-            # Randomly select a subset of transactions for deletion based on the ratio
-            num_deletions = int(len(transactions_to_delete) * deletion_ratio)
-            transactions_to_delete = random.sample(transactions_to_delete, num_deletions)
-
-            # Delete selected transactions from the main graph
-            for u, v in transactions_to_delete:
-                if self.g.has_edge(u, v):
-                    self.g.remove_edge(u, v)
-                    print(f"Transaction deleted: {u} -> {v}")
-                else:
-                    print(f"Transaction not found: {u} -> {v}")
-
-        print(f"Total transactions after deletion: {len(self.g.edges())}")
-
-
-
+            for transaction in transactions_to_delete:
+                src, dst = transaction
+                # Remove the selected transaction from both the typology subgraph and the main graph maybe we just do it for one
+                if subgraph.has_edge(src, dst):
+                    subgraph.remove_edge(src, dst)
+                if self.g.has_edge(src, dst):
+                    self.g.remove_edge(src, dst)
+                # print(f"Deleted transaction from {src} to {dst} in pattern '{pattern_type}'")
                     
     def introduce_node_deletions_within_typologies(self):
         """Delete nodes within specific AML typologies based on predefined ratios."""
         pattern_deletion_ratios = {
-            "fan_in": 0.5,  # Example: 5% of nodes in fan-in patterns will be deleted
-            "fan_out": 0.5,  
-            "cycle": 0.5,  
-            "bipartite": 0.5,
-            "random": 0.5,
-            "scatter_gather": 0.5,
-            "gather_scatter": 0.5,
+            "fan_in": 0.05,  # Example: 5% of nodes in fan-in patterns will be deleted
+            "fan_out": 0.1,  
+            "cycle": 0.07,  
+            "bipartite": 0.05,
+            "random": 0.05,
+            "scatter_gather": 0.1,
+            "gather_scatter": 0.1,
+           
         }
 
         for alert_id, subgraph in self.alert_groups.items():
@@ -1757,12 +1786,13 @@ class TransactionGenerator:
                 true_label = data.get(TRUE_LABEL_KEY, "Not Set")  # Get the true_label attribute
                 print(f"Account ID: {n}, IS_SAR: {data[IS_SAR_KEY]}, True Label: {true_label}")
                 
-    def introduce_noise_to_neighbours(self, noise_ratio=0.1, depth=3):
+    def introduce_noise_to_neighbours(self, noise_ratio=1, depth=1):
         """ If a SAR account has a neighbor that is not a SAR account, then with a certain probability, introduce noise to the neighbor account.
         noise_ratio = the probability of introducing noise to a neighbor account
         depth = the number of steps to look for neighbors, e.g. depth=2 means to look at the neighbors of the neighbors.
         """
         nodes_to_noise = set()
+        reason = 'Neighbour'
 
         def explore_neighbors(node, current_depth):
             nonlocal nodes_to_noise
@@ -1770,7 +1800,7 @@ class TransactionGenerator:
                 return
             for neighbor in self.g.neighbors(node):
                 neighbor_data = self.g.nodes(data=True)[neighbor]
-                if neighbor_data[1][IS_SAR_KEY] == False:
+                if (neighbor_data[1][IS_SAR_KEY] == False) & (random.random() < noise_ratio):
                     nodes_to_noise.add(neighbor)
                     explore_neighbors(neighbor, current_depth - 1)
 
@@ -1781,23 +1811,16 @@ class TransactionGenerator:
         nodes_to_noise.discard(-1)
         nodes_to_noise.discard(-2)
 
-        print(f"Number of nodes to potentially introduce noise to: {len(nodes_to_noise)}")
+        print(f"Number of nodes to introduce noise to: {len(nodes_to_noise)}")
 
-        # Flip the is_sar attribute for selected accounts with a certain probability
-        for account_id in nodes_to_noise:
-            account_data = self.g.nodes(data=True)[account_id]
-            if random.random() < noise_ratio:
-                account_data[1][IS_SAR_KEY] = True  # Set the current SAR status to True
-
-
-
+        return list(nodes_to_noise), reason
 
 
 if __name__ == "__main__":
     argv = sys.argv
     
     # debug: 
-    PARAM_FILES = '10K_accts'
+    PARAM_FILES = '100K_accts_HARD1'
     argv.append(f'paramFiles/{PARAM_FILES}/conf.json')
     
     argc = len(argv)
@@ -1829,26 +1852,31 @@ if __name__ == "__main__":
     txg.load_alert_patterns()  # Loadalert patterns CSV file and create AML typology subgraphs
     txg.mark_active_edges() # mark all edges in the normal models as active
 
-    #txg.introduce_label_noise() # Introduce false positives and negatives after labeling and before exporting
 
-    #txg.introduce_noise_to_typologies()  # Introduce noise based on typology patterns  
+    noise_list = []
+    reasons = []
+    
+    # neighbour_noise_list, reason = txg.introduce_noise_to_neighbours() # Introduce noise to neighbors of SAR accounts
+    # noise_list.append(neighbour_noise_list)
+    # reasons.append(reason)
 
-    #txg.introduce_transaction_deletions() # randomly delete transactions 
+    # random_noise_list, reason = txg.introduce_random_noise() # Introduce false positives and negatives after labeling and before exporting
+    # noise_list.append(random_noise_list)
+    # reasons.append(reason)
 
-    #txg.introduce_transaction_deletions_within_typologies() # randomly delete transactions
-
-    #txg.introduce_node_deletions_within_typologies()
-
-    #txg.introduce_noise_to_neighbours() # Introduce noise to neighbors of SAR accounts
-
-    #txg.print_sar_account_labels() # Just want to dubbel check that the noise introduction worked
+    # topology_list_of_list, topology_reasons = txg.introduce_noise_to_typologies()  # Introduce noise based on typology patterns
+    # noise_list.extend(topology_list_of_list)
+    # reasons.extend(topology_reasons)
 
 
     if degree_threshold > 0:
         logger.info("Added alert transaction patterns")
         txg.count_fan_in_out_patterns(degree_threshold)
+
     txg.write_account_list()  # Export accounts to a CSV file
     txg.write_transaction_list()  # Export transactions to a CSV file
     txg.write_alert_account_list()  # Export alert accounts to a CSV file
     txg.write_normal_models()
-    txg.write_node_list() # Export nodes to node_log.csv
+    # txg.write_node_list() # Export nodes to node_log.csv ANVÄND INTE DENNA NODE LOG
+    # txg.write_noise_list(noise_list,reasons) # Export noise to noise.csv
+
