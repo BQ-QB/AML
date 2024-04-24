@@ -14,11 +14,10 @@ import pandas as pd
 import os
 
 
-# Reload your modules if they have been updated
+
 reload(data)
 reload(modules)
 
-# Set device to GPU if available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Device: {device}")
 
@@ -31,10 +30,10 @@ def preprocess_data(file_path):
     """Load the CSV file, fill missing values with 0, and return a DataFrame."""
     df = pd.read_csv(file_path)
     if 'bank' in df.columns:
-        df = df.drop(columns=['bank'])  # Drop the 'bank' column if it exists
+        df = df.drop(columns=['bank'])  
     if 'true_label' in df.columns:
-        df = df.drop(columns=['true_label'])  # Drop the 'bank' column if it exists
-    df.fillna(0, inplace=True)  # Fill missing values with 0
+        df = df.drop(columns=['true_label'])  
+    df.fillna(0, inplace=True)  
     return df
 
 def save_preprocessed_data(df, file_path):
@@ -124,7 +123,7 @@ def evaluate_and_plot(model, testdata, plot_name, dataset_name):
     plt.ylim([0.0, 1.05])
     plt.xlim([0.0, 1.0])
     plt.title(f'Precision-Recall curve: AP={average_precision:.2f}')
-    # Check if the directory exists, create it if not
+    
     results_dir = "GNN_Results_50"
     os.makedirs(results_dir, exist_ok=True)
     
@@ -159,7 +158,7 @@ for dataset_name in dataset_names:
         },
         "GCN": {
             "model_class": GCN,
-            "epochs": 1000,  # Note the difference in the number of epochs
+            "epochs": 1000,  
             "learning_rate": 0.05253036287687629,
             "input_dim": traindata.num_node_features,
             "hidden_dim": 128,
