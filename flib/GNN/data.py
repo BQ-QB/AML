@@ -11,7 +11,6 @@ import numpy as np
 import os
 
 
-# (Written by Edvin)
 class AmlsimDataset():
     def __init__(self, node_file:str, edge_file:str, node_features:bool=False, edge_features:bool=True, node_labels:bool=False, edge_labels:bool=False, seed:int=42):
         self.data = self.load_data(node_file, edge_file, node_features, edge_features, node_labels, edge_labels)
